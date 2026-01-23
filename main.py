@@ -62,6 +62,13 @@ def main():
     print(f"Winning is row #: {winning_row}")
 
     winning_range = "D" + str(winning_row)
+
+    result = (sheet.values().update(spreadsheetId=SAMPLE_SPREADSHEET_ID,
+                                   range=row_def,
+                                   body={"values": name_array},
+                                   valueInputOption="RAW")
+              .execute())
+
     result = (
       sheet.values()
       .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=winning_range)
@@ -69,11 +76,7 @@ def main():
     )
     print(f"Winner is: {result.get("values", [])}!")
 
-    result = (sheet.values().update(spreadsheetId=SAMPLE_SPREADSHEET_ID,
-                                   range=row_def,
-                                   body={"values": name_array},
-                                   valueInputOption="RAW")
-              .execute())
+    
     print(result)
   except HttpError as err:
     print(err)
