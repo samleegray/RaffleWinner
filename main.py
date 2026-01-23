@@ -11,14 +11,11 @@ from googleapiclient.errors import HttpError
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # The ID and range of a sample spreadsheet.
-SAMPLE_SPREADSHEET_ID = "1IjEDMsHl39oaRAv0RhE_EJ2Itc9ExKKG85NgNRXpe6Y"
+WEEKLY_LOTTO_SPREADSHEET_ID = "1IjEDMsHl39oaRAv0RhE_EJ2Itc9ExKKG85NgNRXpe6Y"
 # SAMPLE_RANGE_NAME = "Class Data!A2:E"
-SAMPLE_RANGE_NAME = "A1:B"
+NAMES_TICKETS_RANGE = "A2:B"
 
-def main():
-  """Shows basic usage of the Sheets API.
-  Prints values from a sample spreadsheet.
-  """
+def authorize():
   creds = None
   # The file token.json stores the user's access and refresh tokens, and is
   # created automatically when the authorization flow completes for the first
@@ -38,48 +35,81 @@ def main():
     with open("token.json", "w") as token:
       token.write(creds.to_json())
 
-  try:
-    service = build("sheets", "v4", credentials=creds)
+  return creds
 
-    # Call the Sheets API
-    sheet = service.spreadsheets()
-    result = (
-        sheet.values()
-        .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=SAMPLE_RANGE_NAME)
-        .execute()
-    )
-    values = result.get("values", [])
+def get_service():
+  creds = authorize()
+  try:
+    return build("sheets", "v4", credentials=creds)
+  except HttpError as err:
+    print(err)
+
+
+def get_spreadsheet():
+  return get_service().spreadsheets()
+
+
+def get_names_and_tickets(sheet):
+  result = (
+    sheet.values()
+    .get(spreadsheetId=WEEKLY_LOTTO_SPREADSHEET_ID, range=NAMES_TICKETS_RANGE)
+    .execute()
+  )
+  values = result.get("values", [])
+
+  return values
+
+
+def update_random_names(sheet, row_def, name_array):
+  try:
+    (sheet.values().update(spreadsheetId=WEEKLY_LOTTO_SPREADSHEET_ID,
+                                    range=row_def,
+                                    body={"values": name_array},
+                                    valueInputOption="RAW")
+     .execute())
+  except HttpError as err:
+    print(err)
+
+
+def get_winner(sheet, values):
+  winning_row = random.randint(2, total_tickets(values))
+  print(f"Winning is row #: {winning_row}")
+
+  winning_range = "D" + str(winning_row)
+
+  result = (
+    sheet.values()
+    .get(spreadsheetId=WEEKLY_LOTTO_SPREADSHEET_ID, range=winning_range)
+    .execute()
+  )
+
+  winner = result.get("values", [])
+  return winner
+
+def main():
+  """Shows basic usage of the Sheets API.
+  Prints values from a sample spreadsheet.
+  """
+  sheet = get_spreadsheet()
+  try:
+    values = get_names_and_tickets(sheet)
 
     if not values:
       print("No data found.")
       return
 
-    print(values)
     row_def = create_row_definition(values)
     name_array = create_name_array(values)
 
-    winning_row = random.randint(0, total_tickets(values))
-    print(f"Winning is row #: {winning_row}")
+    update_random_names(sheet, row_def, name_array)
 
-    winning_range = "D" + str(winning_row)
-
-    result = (sheet.values().update(spreadsheetId=SAMPLE_SPREADSHEET_ID,
-                                   range=row_def,
-                                   body={"values": name_array},
-                                   valueInputOption="RAW")
-              .execute())
-
-    result = (
-      sheet.values()
-      .get(spreadsheetId=SAMPLE_SPREADSHEET_ID, range=winning_range)
-      .execute()
-    )
-    print(f"Winner is: {result.get("values", [])}!")
+    winner = get_winner(sheet, values)
 
     
-    print(result)
+    print(f"Winner is: {winner}!")
   except HttpError as err:
     print(err)
+
 
 
 def total_tickets(ticket_stats):
@@ -91,11 +121,12 @@ def total_tickets(ticket_stats):
 
   return total_count
 
+
 def create_row_definition(ticket_stats):
-  row_definition = "D1:D"
+  row_definition = "D2:D"
   total_count = total_tickets(ticket_stats)
 
-  row_definition += str(total_count)
+  row_definition += str(total_count+1)
   print(row_definition)
   return row_definition
 
@@ -111,6 +142,7 @@ def create_name_array(ticket_stats):
   random.shuffle(array)
   print(array)
   return array
+
 
 if __name__ == "__main__":
   main()
