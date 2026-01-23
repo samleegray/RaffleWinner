@@ -30,7 +30,16 @@ If modifying the Google API scopes in `SCOPES`, delete `token.json` to force re-
 
 ## Architecture
 
-The application uses the Google Sheets API v4. All code is in `main.py`, organized as a `Raffle` class.
+The application uses the Google Sheets API v4.
+
+### File Structure
+
+- `main.py` - Entry point with CLI argument parsing and logging configuration
+- `raffle.py` - Contains the `Raffle` class with all business logic
+
+### Logging
+
+The application uses Python's `logging` module. Logging is configured in `main.py` at INFO level. The `Raffle` class uses a module-level logger (`logging.getLogger(__name__)`).
 
 ### Raffle Class
 
