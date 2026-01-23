@@ -1,3 +1,4 @@
+import argparse
 import os.path
 import random
 
@@ -9,140 +10,128 @@ from googleapiclient.errors import HttpError
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-# The ID and range of a sample spreadsheet.
-WEEKLY_LOTTO_SPREADSHEET_ID = "1IjEDMsHl39oaRAv0RhE_EJ2Itc9ExKKG85NgNRXpe6Y"
-# SAMPLE_RANGE_NAME = "Class Data!A2:E"
 NAMES_TICKETS_RANGE = "A2:B"
 
-def authorize():
-  creds = None
-  # The file token.json stores the user's access and refresh tokens, and is
-  # created automatically when the authorization flow completes for the first
-  # time.
-  if os.path.exists("token.json"):
-    creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-  # If there are no (valid) credentials available, let the user log in.
-  if not creds or not creds.valid:
-    if creds and creds.expired and creds.refresh_token:
-      creds.refresh(Request())
-    else:
-      flow = InstalledAppFlow.from_client_secrets_file(
-          "credentials.json", SCOPES
-      )
-      creds = flow.run_local_server(port=0)
-    # Save the credentials for the next run
-    with open("token.json", "w") as token:
-      token.write(creds.to_json())
 
-  return creds
+class Raffle:
+    def __init__(self, spreadsheet_id: str):
+        self.spreadsheet_id = spreadsheet_id
+        self._sheet = None
 
-def get_service():
-  creds = authorize()
-  try:
-    return build("sheets", "v4", credentials=creds)
-  except HttpError as err:
-    print(err)
+    @property
+    def sheet(self):
+        if self._sheet is None:
+            self._sheet = self._authorize_and_build()
+        return self._sheet
 
+    def _authorize(self) -> Credentials:
+        creds = None
+        # The file token.json stores the user's access and refresh tokens, and is
+        # created automatically when the authorization flow completes for the first
+        # time.
+        if os.path.exists("token.json"):
+            creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+        # If there are no (valid) credentials available, let the user log in.
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    "credentials.json", SCOPES
+                )
+                creds = flow.run_local_server(port=0)
+            # Save the credentials for the next run
+            with open("token.json", "w") as token:
+                token.write(creds.to_json())
 
-def get_spreadsheet():
-  return get_service().spreadsheets()
+        return creds
 
+    def _build_service(self, creds: Credentials):
+        return build("sheets", "v4", credentials=creds)
 
-def get_names_and_tickets(sheet):
-  result = (
-    sheet.values()
-    .get(spreadsheetId=WEEKLY_LOTTO_SPREADSHEET_ID, range=NAMES_TICKETS_RANGE)
-    .execute()
-  )
-  values = result.get("values", [])
+    def _authorize_and_build(self):
+        creds = self._authorize()
+        service = self._build_service(creds)
+        return service.spreadsheets()
 
-  return values
+    def _get_participants(self) -> list[list[str]]:
+        result = (
+            self.sheet.values()
+            .get(spreadsheetId=self.spreadsheet_id, range=NAMES_TICKETS_RANGE)
+            .execute()
+        )
+        return result.get("values", [])
 
+    def _total_tickets(self, participants: list[list[str]]) -> int:
+        total_count = 0
+        for participant in participants:
+            total_count += int(participant[1])
+        return total_count
 
-def update_random_names(sheet, row_def, name_array):
-  try:
-    (sheet.values().update(spreadsheetId=WEEKLY_LOTTO_SPREADSHEET_ID,
-                                    range=row_def,
-                                    body={"values": name_array},
-                                    valueInputOption="RAW")
-     .execute())
-  except HttpError as err:
-    print(err)
+    def _create_row_definition(self, participants: list[list[str]]) -> str:
+        total_count = self._total_tickets(participants)
+        return f"D2:D{total_count + 1}"
 
+    def _create_entries(self, participants: list[list[str]]) -> list[list[str]]:
+        entries = []
+        for participant in participants:
+            name = participant[0]
+            ticket_count = int(participant[1])
+            for _ in range(ticket_count):
+                entries.append([name])
 
-def get_winner(sheet, values):
-  winning_row = random.randint(2, total_tickets(values))
-  print(f"Winning is row #: {winning_row}")
+        random.shuffle(entries)
+        return entries
 
-  winning_range = "D" + str(winning_row)
+    def _write_entries(self, row_def: str, entries: list[list[str]]) -> None:
+        self.sheet.values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=row_def,
+            body={"values": entries},
+            valueInputOption="RAW"
+        ).execute()
 
-  result = (
-    sheet.values()
-    .get(spreadsheetId=WEEKLY_LOTTO_SPREADSHEET_ID, range=winning_range)
-    .execute()
-  )
+    def _select_winner(self, participants: list[list[str]]) -> str:
+        winning_row = random.randint(2, self._total_tickets(participants) + 1)
+        winning_range = f"D{winning_row}"
 
-  winner = result.get("values", [])
-  return winner
+        result = (
+            self.sheet.values()
+            .get(spreadsheetId=self.spreadsheet_id, range=winning_range)
+            .execute()
+        )
 
-def main():
-  """Shows basic usage of the Sheets API.
-  Prints values from a sample spreadsheet.
-  """
-  sheet = get_spreadsheet()
-  try:
-    values = get_names_and_tickets(sheet)
+        winner = result.get("values", [])
+        return winner[0][0] if winner else "Unknown"
 
-    if not values:
-      print("No data found.")
-      return
+    def run(self) -> None:
+        """Runs the raffle using participant data from a Google Sheet."""
+        try:
+            participants = self._get_participants()
 
-    row_def = create_row_definition(values)
-    name_array = create_name_array(values)
+            if not participants:
+                print("No data found.")
+                return
 
-    update_random_names(sheet, row_def, name_array)
+            total = self._total_tickets(participants)
+            print(f"Loaded {len(participants)} participants with {total} total tickets.")
 
-    winner = get_winner(sheet, values)
+            row_def = self._create_row_definition(participants)
+            entries = self._create_entries(participants)
 
-    
-    print(f"Winner is: {winner}!")
-  except HttpError as err:
-    print(err)
+            self._write_entries(row_def, entries)
 
+            winner = self._select_winner(participants)
 
-
-def total_tickets(ticket_stats):
-  total_count = 0
-
-  for stat in ticket_stats:
-    print(f"{stat[0]} bought {stat[1]} tickets.")
-    total_count += int(stat[1])
-
-  return total_count
-
-
-def create_row_definition(ticket_stats):
-  row_definition = "D2:D"
-  total_count = total_tickets(ticket_stats)
-
-  row_definition += str(total_count+1)
-  print(row_definition)
-  return row_definition
-
-
-def create_name_array(ticket_stats):
-  array = []
-  for stat in ticket_stats:
-    player_name = stat[0]
-    ticket_count = int(stat[1])
-    for i in range(ticket_count):
-      array.append([player_name])
-
-  random.shuffle(array)
-  print(array)
-  return array
+            print(f"Winner is: {winner}!")
+        except HttpError as err:
+            print(err)
 
 
 if __name__ == "__main__":
-  main()
+    parser = argparse.ArgumentParser(description="Run a raffle from a Google Sheet")
+    parser.add_argument("spreadsheet_id", help="The Google Spreadsheet ID")
+    args = parser.parse_args()
+
+    raffle = Raffle(args.spreadsheet_id)
+    raffle.run()
