@@ -108,7 +108,7 @@ class Raffle:
         return flow.run_local_server(port=0)
 
     def _build_service(self, creds: Credentials):
-        return build("sheets", "v4", credentials=creds)
+        return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     def _authorize_and_build(self):
         creds = self._authorize()
@@ -261,7 +261,7 @@ class Raffle:
             spreadsheetId=self.spreadsheet_id,
             range=f"{DATE_COLUMN}{date_row}",
             body={"values": [[current_date]]},
-            valueInputOption="RAW"
+            valueInputOption="USER_ENTERED"
         ).execute()
 
         self.sheet.values().update(
