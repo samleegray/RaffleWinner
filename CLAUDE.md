@@ -81,6 +81,15 @@ class Participant:
     tickets: int
 ```
 
+### Constants
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `SCOPES` | `["...spreadsheets"]` | Google API permissions |
+| `NAMES_TICKETS_RANGE` | `"A2:B"` | Range for participant data |
+| `DATE_COLUMN` | `"F"` | Column for winner history dates |
+| `WINNER_COLUMN` | `"G"` | Column for winner history names |
+
 ### Custom Exceptions
 
 | Exception | Description |
@@ -113,11 +122,23 @@ The `Raffle` class encapsulates all spreadsheet operations and state.
 | `_validate_participant()` | Validates and converts row to Participant |
 | `_get_participants()` | Reads names and ticket counts from columns A2:B |
 | `_total_tickets()` | Calculates total ticket count from all participants |
+| `_get_first_empty_row()` | Finds the first empty row in a given column |
 | `_create_row_definition()` | Generates the D column range (e.g., "D2:D50") |
 | `_create_entries()` | Expands names by ticket count and shuffles |
 | `_write_entries()` | Writes shuffled entries to column D |
 | `_select_winner()` | Randomly selects a row from column D |
 | `_select_winner_from_entries()` | Selects winner from entries list (for dry-run) |
+| `_write_winner_record()` | Writes date and winner to history columns F and G |
+
+### Spreadsheet Column Layout
+
+| Column | Purpose |
+|--------|---------|
+| A | Participant names |
+| B | Ticket counts |
+| D | Expanded entries (one row per ticket) |
+| F | Winner history dates (MM/DD/YYYY format) |
+| G | Winner history names (prefixed with @) |
 
 ### Data Flow
 
@@ -126,3 +147,4 @@ The `Raffle` class encapsulates all spreadsheet operations and state.
 3. Expand entries (3 tickets = 3 entries for that name)
 4. Shuffle and write to column D (skipped in dry-run mode)
 5. Randomly select a row from D as the winner
+6. Record the date and winner to columns F and G (skipped in dry-run mode)

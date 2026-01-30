@@ -3,7 +3,9 @@ import os.path
 import random
 import re
 from dataclasses import dataclass
+from datetime import date
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -13,6 +15,8 @@ from googleapiclient.errors import HttpError
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 NAMES_TICKETS_RANGE = "A2:B"
+DATE_COLUMN = "F"
+WINNER_COLUMN = "G"
 
 logger = logging.getLogger(__name__)
 
@@ -76,23 +80,32 @@ class Raffle:
         # If there are no (valid) credentials available, let the user log in.
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
+                try:
+                    creds.refresh(Request())
+                except RefreshError:
+                    logger.warning("Token expired or revoked, re-authorizing...")
+                    os.remove("token.json")
+                    creds = self._run_oauth_flow()
             else:
-                if not os.path.exists("credentials.json"):
-                    raise CredentialsError(
-                        "credentials.json not found. "
-                        "Please download OAuth credentials from Google Cloud Console: "
-                        "https://console.cloud.google.com/apis/credentials"
-                    )
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    "credentials.json", SCOPES
-                )
-                creds = flow.run_local_server(port=0)
+                creds = self._run_oauth_flow()
             # Save the credentials for the next run
             with open("token.json", "w") as token:
                 token.write(creds.to_json())
 
         return creds
+
+    def _run_oauth_flow(self) -> Credentials:
+        """Run the OAuth2 authorization flow."""
+        if not os.path.exists("credentials.json"):
+            raise CredentialsError(
+                "credentials.json not found. "
+                "Please download OAuth credentials from Google Cloud Console: "
+                "https://console.cloud.google.com/apis/credentials"
+            )
+        flow = InstalledAppFlow.from_client_secrets_file(
+            "credentials.json", SCOPES
+        )
+        return flow.run_local_server(port=0)
 
     def _build_service(self, creds: Credentials):
         return build("sheets", "v4", credentials=creds)
@@ -166,6 +179,32 @@ class Raffle:
     def _total_tickets(self, participants: list[Participant]) -> int:
         return sum(p.tickets for p in participants)
 
+    def _get_first_empty_row(self, column: str, start_row: int = 1) -> int:
+        """Find the first empty row in a given column.
+
+        Args:
+            column: The column letter (e.g., "A", "D")
+            start_row: The row to start searching from (default 1)
+
+        Returns:
+            The row number of the first empty cell in the column
+        """
+        range_notation = f"{column}{start_row}:{column}"
+        result = (
+            self.sheet.values()
+            .get(spreadsheetId=self.spreadsheet_id, range=range_notation)
+            .execute()
+        )
+        values = result.get("values", [])
+
+        # Find the first empty row
+        for i, row in enumerate(values):
+            if not row or not row[0].strip():
+                return start_row + i
+
+        # All rows have values, return the next row after the last one
+        return start_row + len(values)
+
     def _create_row_definition(self, participants: list[Participant]) -> str:
         total_count = self._total_tickets(participants)
         return f"D2:D{total_count + 1}"
@@ -206,6 +245,34 @@ class Raffle:
             return "Unknown"
         return random.choice(entries)[0]
 
+    def _write_winner_record(self, winner: str) -> None:
+        """Write the date and winner to the history columns.
+
+        Args:
+            winner: The winner's name
+        """
+        date_row = self._get_first_empty_row(DATE_COLUMN)
+        winner_row = self._get_first_empty_row(WINNER_COLUMN)
+
+        current_date = date.today().strftime("%m/%d/%Y")
+        winner_value = f"@{winner}"
+
+        self.sheet.values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{DATE_COLUMN}{date_row}",
+            body={"values": [[current_date]]},
+            valueInputOption="RAW"
+        ).execute()
+
+        self.sheet.values().update(
+            spreadsheetId=self.spreadsheet_id,
+            range=f"{WINNER_COLUMN}{winner_row}",
+            body={"values": [[winner_value]]},
+            valueInputOption="RAW"
+        ).execute()
+
+        logger.debug("Recorded winner '%s' at row %d with date %s", winner, winner_row, current_date)
+
     def run(self, dry_run: bool = False) -> str | None:
         """Run the raffle using participant data from a Google Sheet.
 
@@ -234,6 +301,7 @@ class Raffle:
                 row_def = self._create_row_definition(participants)
                 self._write_entries(row_def, entries)
                 winner = self._select_winner(participants)
+                self._write_winner_record(winner)
 
             logger.info("Winner is: %s!", winner)
             return winner
