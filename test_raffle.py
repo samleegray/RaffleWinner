@@ -1,11 +1,15 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from google.auth.exceptions import RefreshError
+
 from raffle import (
     CredentialsError,
+    DATE_COLUMN,
     Participant,
     Raffle,
     SpreadsheetError,
+    WINNER_COLUMN,
 )
 
 
@@ -144,6 +148,43 @@ class TestCredentialsError(unittest.TestCase):
                 raffle._authorize()
             self.assertIn("credentials.json not found", str(ctx.exception))
 
+    @patch("raffle.InstalledAppFlow")
+    @patch("raffle.Credentials")
+    @patch("os.path.exists")
+    @patch("os.remove")
+    def test_refresh_error_removes_token_and_reauthorizes(
+        self, mock_remove, mock_exists, mock_creds_class, mock_flow_class
+    ):
+        valid_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+        raffle = Raffle(valid_id)
+
+        # Setup: token.json exists, credentials.json exists
+        mock_exists.side_effect = lambda f: f in ["token.json", "credentials.json"]
+
+        # Setup: expired credentials that fail to refresh
+        mock_creds = MagicMock()
+        mock_creds.valid = False
+        mock_creds.expired = True
+        mock_creds.refresh_token = "some_token"
+        mock_creds.refresh.side_effect = RefreshError("Token has been expired or revoked.")
+        mock_creds_class.from_authorized_user_file.return_value = mock_creds
+
+        # Setup: OAuth flow returns new credentials
+        mock_new_creds = MagicMock()
+        mock_flow = MagicMock()
+        mock_flow.run_local_server.return_value = mock_new_creds
+        mock_flow_class.from_client_secrets_file.return_value = mock_flow
+
+        with patch("builtins.open", MagicMock()):
+            result = raffle._authorize()
+
+        # Verify token.json was removed
+        mock_remove.assert_called_once_with("token.json")
+        # Verify new OAuth flow was started
+        mock_flow_class.from_client_secrets_file.assert_called_once()
+        # Verify new credentials are returned
+        self.assertEqual(result, mock_new_creds)
+
 
 class TestRunMethod(unittest.TestCase):
     def setUp(self):
@@ -162,16 +203,19 @@ class TestRunMethod(unittest.TestCase):
         mock_get.return_value = [Participant(name="Alice", tickets=1)]
         mock_select.return_value = "Alice"
 
-        with patch.object(self.raffle, "_write_entries") as mock_write:
+        with patch.object(self.raffle, "_write_entries") as mock_write, \
+             patch.object(self.raffle, "_write_winner_record") as mock_record:
             result = self.raffle.run(dry_run=True)
 
         mock_write.assert_not_called()
+        mock_record.assert_not_called()
         self.assertEqual(result, "Alice")
 
+    @patch.object(Raffle, "_write_winner_record")
     @patch.object(Raffle, "_select_winner")
     @patch.object(Raffle, "_write_entries")
     @patch.object(Raffle, "_get_participants")
-    def test_run_returns_winner(self, mock_get, mock_write, mock_select):
+    def test_run_returns_winner(self, mock_get, mock_write, mock_select, mock_record):
         mock_get.return_value = [
             Participant(name="Alice", tickets=2),
             Participant(name="Bob", tickets=1),
@@ -182,6 +226,7 @@ class TestRunMethod(unittest.TestCase):
 
         self.assertEqual(result, "Bob")
         mock_write.assert_called_once()
+        mock_record.assert_called_once_with("Bob")
 
 
 class TestSelectWinnerFromEntries(unittest.TestCase):
@@ -197,6 +242,107 @@ class TestSelectWinnerFromEntries(unittest.TestCase):
         entries = [["Alice"], ["Bob"], ["Charlie"]]
         result = self.raffle._select_winner_from_entries(entries)
         self.assertIn(result, ["Alice", "Bob", "Charlie"])
+
+
+class TestGetFirstEmptyRow(unittest.TestCase):
+    def setUp(self):
+        with patch.object(Raffle, "_validate_spreadsheet_id"):
+            self.raffle = Raffle("test_id")
+        self.mock_sheet = MagicMock()
+        self.raffle._sheet = self.mock_sheet
+
+    def test_empty_column_returns_start_row(self):
+        self.mock_sheet.values().get().execute.return_value = {"values": []}
+        result = self.raffle._get_first_empty_row("A")
+        self.assertEqual(result, 1)
+
+    def test_finds_first_empty_in_middle(self):
+        self.mock_sheet.values().get().execute.return_value = {
+            "values": [["data"], ["data"], [], ["data"]]
+        }
+        result = self.raffle._get_first_empty_row("A")
+        self.assertEqual(result, 3)
+
+    def test_finds_empty_string_row(self):
+        self.mock_sheet.values().get().execute.return_value = {
+            "values": [["data"], ["  "], ["data"]]
+        }
+        result = self.raffle._get_first_empty_row("A")
+        self.assertEqual(result, 2)
+
+    def test_all_filled_returns_next_row(self):
+        self.mock_sheet.values().get().execute.return_value = {
+            "values": [["a"], ["b"], ["c"]]
+        }
+        result = self.raffle._get_first_empty_row("A")
+        self.assertEqual(result, 4)
+
+    def test_custom_start_row(self):
+        self.mock_sheet.values().get().execute.return_value = {
+            "values": [["data"], ["data"]]
+        }
+        result = self.raffle._get_first_empty_row("A", start_row=5)
+        self.assertEqual(result, 7)
+
+    def test_uses_correct_range_notation(self):
+        self.mock_sheet.values().get().execute.return_value = {"values": []}
+        self.raffle._get_first_empty_row("F", start_row=2)
+        self.mock_sheet.values().get.assert_called()
+        call_kwargs = self.mock_sheet.values().get.call_args[1]
+        self.assertEqual(call_kwargs["range"], "F2:F")
+
+
+class TestWriteWinnerRecord(unittest.TestCase):
+    def setUp(self):
+        with patch.object(Raffle, "_validate_spreadsheet_id"):
+            self.raffle = Raffle("test_id")
+        self.mock_sheet = MagicMock()
+        self.raffle._sheet = self.mock_sheet
+
+    @patch("raffle.date")
+    def test_writes_date_and_winner(self, mock_date):
+        mock_date.today.return_value.strftime.return_value = "01/30/2026"
+        self.mock_sheet.values().get().execute.return_value = {"values": [["header"]]}
+
+        self.raffle._write_winner_record("Alice")
+
+        # Verify two update calls were made
+        self.assertEqual(self.mock_sheet.values().update.call_count, 2)
+
+    @patch("raffle.date")
+    def test_writes_correct_date_format(self, mock_date):
+        mock_date.today.return_value.strftime.return_value = "01/30/2026"
+        self.mock_sheet.values().get().execute.return_value = {"values": []}
+
+        self.raffle._write_winner_record("Alice")
+
+        # Check strftime was called with correct format
+        mock_date.today().strftime.assert_called_with("%m/%d/%Y")
+
+    @patch("raffle.date")
+    def test_writes_winner_with_at_prefix(self, mock_date):
+        mock_date.today.return_value.strftime.return_value = "01/30/2026"
+        self.mock_sheet.values().get().execute.return_value = {"values": []}
+
+        self.raffle._write_winner_record("Alice")
+
+        # Find the call that writes to winner column
+        calls = self.mock_sheet.values().update.call_args_list
+        winner_call = [c for c in calls if WINNER_COLUMN in str(c)]
+        self.assertTrue(len(winner_call) > 0)
+
+    @patch.object(Raffle, "_get_first_empty_row")
+    @patch("raffle.date")
+    def test_writes_to_correct_rows(self, mock_date, mock_get_empty):
+        mock_date.today.return_value.strftime.return_value = "01/30/2026"
+        mock_get_empty.side_effect = [5, 5]  # Date row, Winner row
+
+        self.raffle._write_winner_record("Bob")
+
+        calls = self.mock_sheet.values().update.call_args_list
+        ranges_used = [c[1]["range"] for c in calls]
+        self.assertIn(f"{DATE_COLUMN}5", ranges_used)
+        self.assertIn(f"{WINNER_COLUMN}5", ranges_used)
 
 
 if __name__ == "__main__":
