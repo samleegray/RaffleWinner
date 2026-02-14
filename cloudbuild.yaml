@@ -8,15 +8,15 @@ steps:
       - '-c'
       - 'pip install -r requirements.txt pytest && python -m pytest test_raffle.py -v'
 
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    entrypoint: gcloud
-    args:
-      - 'run'
-      - 'deploy'
-      - 'raffle-api'
-      - '--source'
-      - '.'
-      - '--region'
-      - 'us-central1'
-      - '--service-account'
-      - 'raffle-api@$PROJECT_ID.iam.gserviceaccount.com'
+#  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+#    entrypoint: gcloud
+#    args:
+#      - 'run'
+#      - 'deploy'
+#      - 'raffle-api'
+#      - '--source'
+#      - '.'
+#      - '--region'
+#      - 'us-central1'
+#      - '--service-account'
+#      - 'raffle-api@$PROJECT_ID.iam.gserviceaccount.com'
