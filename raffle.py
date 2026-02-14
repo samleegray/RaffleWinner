@@ -50,9 +50,10 @@ class Raffle:
     # Google Spreadsheet IDs are 44 characters, alphanumeric with hyphens/underscores
     SPREADSHEET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{44}$")
 
-    def __init__(self, spreadsheet_id: str):
+    def __init__(self, spreadsheet_id: str, credentials: Credentials | None = None):
         self._validate_spreadsheet_id(spreadsheet_id)
         self.spreadsheet_id = spreadsheet_id
+        self._credentials = credentials
         self._sheet = None
 
     def _validate_spreadsheet_id(self, spreadsheet_id: str) -> None:
@@ -111,7 +112,7 @@ class Raffle:
         return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     def _authorize_and_build(self):
-        creds = self._authorize()
+        creds = self._credentials if self._credentials else self._authorize()
         service = self._build_service(creds)
         return service.spreadsheets()
 

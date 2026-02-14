@@ -345,5 +345,35 @@ class TestWriteWinnerRecord(unittest.TestCase):
         self.assertIn(f"{WINNER_COLUMN}5", ranges_used)
 
 
+class TestCredentialsParameter(unittest.TestCase):
+    def test_provided_credentials_skip_oauth(self):
+        """When credentials are provided, _authorize should not be called."""
+        mock_creds = MagicMock()
+        mock_service = MagicMock()
+
+        with patch.object(Raffle, "_validate_spreadsheet_id"):
+            raffle = Raffle("test_id", credentials=mock_creds)
+
+        with patch.object(raffle, "_authorize") as mock_auth, \
+             patch.object(raffle, "_build_service", return_value=mock_service):
+            _ = raffle.sheet
+
+        mock_auth.assert_not_called()
+
+    def test_no_credentials_uses_oauth(self):
+        """When no credentials are provided, _authorize should be called."""
+        mock_creds = MagicMock()
+        mock_service = MagicMock()
+
+        with patch.object(Raffle, "_validate_spreadsheet_id"):
+            raffle = Raffle("test_id")
+
+        with patch.object(raffle, "_authorize", return_value=mock_creds) as mock_auth, \
+             patch.object(raffle, "_build_service", return_value=mock_service):
+            _ = raffle.sheet
+
+        mock_auth.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

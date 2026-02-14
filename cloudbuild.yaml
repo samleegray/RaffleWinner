@@ -1,0 +1,21 @@
+steps:
+  - name: 'python:3.12-slim'
+    entrypoint: pip
+    args: ['install', '-r', 'requirements.txt', 'pytest']
+
+  - name: 'python:3.12-slim'
+    entrypoint: python
+    args: ['-m', 'pytest', 'test_raffle.py', '-v']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'raffle-api'
+      - '--source'
+      - '.'
+      - '--region'
+      - 'us-central1'
+      - '--service-account'
+      - 'raffle-api@$PROJECT_ID.iam.gserviceaccount.com'
